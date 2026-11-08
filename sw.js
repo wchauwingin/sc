@@ -1,6 +1,6 @@
 // Minimal service worker so the app can be installed to the home screen.
 // It caches the app shell; music always streams from Spotify.
-var CACHE = 'song-cards-v6';
+var CACHE = 'song-cards-v8';
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', function (e) { e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); })); self.skipWaiting(); });
 self.addEventListener('activate', function (e) {
