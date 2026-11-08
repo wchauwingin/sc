@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17A673">
+<meta name="robots" content="noindex">
+<title>Song Cards</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #FFFFFF; --surface: #F4F6F9; --ink: #18233A; --muted: #6B7587; --line: #E2E6EC;
+    --accent: #17A673; --on-accent: #FFFFFF; --danger: #B3263A;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131925; --surface: #1B2332; --ink: #E6EAF1; --muted: #9AA5B8; --line: #334055;
+      --accent: #3CC892; --on-accent: #0E1420; --danger: #FF7A8A; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans CJK TC", "Noto Sans", system-ui, sans-serif;
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; align-items: center; gap: 10px; }
+  header i { width: 5px; height: 22px; border-radius: 3px; background: var(--accent); }
+  h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: -.01em; }
+  .scan-btn {
+    font: inherit; font-size: 17px; font-weight: 700; border: 0; border-radius: 14px; cursor: pointer;
+    background: var(--accent); color: var(--on-accent); padding: 18px; width: 100%;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .scan-btn svg { width: 22px; height: 22px; }
+  .ghost { font: inherit; font-size: 15px; border: 1px solid var(--line); background: transparent; color: var(--ink);
+    border-radius: 12px; padding: 12px; width: 100%; cursor: pointer; }
+  .camera { position: relative; border-radius: 16px; overflow: hidden; background: #000; aspect-ratio: 3 / 4; }
+  .camera video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .camera .frame { position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.9); border-radius: 18px;
+    box-shadow: 0 0 0 999px rgba(0,0,0,.35); }
+  .status { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0; min-height: 1.6em; }
+  .status.err { color: var(--danger); }
+  .player iframe { width: 100%; border: 0; border-radius: 12px; display: block; }
+  .ended { background: var(--surface); border-radius: 14px; padding: 14px 16px; font-size: 15px; line-height: 1.5; }
+  .ended strong { display: block; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header><i></i><h1>Song Cards</h1></header>
+
+  <button class="scan-btn" id="scan" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/></svg>
+    <span id="scan-label">Scan a card</span>
+  </button>
+
+  <div class="camera" id="camera" hidden>
+    <video id="video" playsinline muted></video>
+    <div class="frame"></div>
+  </div>
+  <button class="ghost" id="cancel" type="button" hidden>Cancel</button>
+
+  <p class="status" id="status" role="status">Point the camera at the QR code on a song card.</p>
+
+  <div class="ended" id="ended" hidden><strong>Song finished.</strong>Scan your next card to keep listening.</div>
+  <div class="player" id="player"><div id="embed"></div></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var video = $('video'), statusEl = $('status');
+  var stream = null, scanning = false, detector = null, canvas = document.createElement('canvas');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var controller = null, pendingUri = null, started = false;
+
+  function setStatus(text, isErr) { statusEl.textContent = text; statusEl.className = 'status' + (isErr ? ' err' : ''); }
+
+  /* Accepts Spotify track links, spotify:track: URIs, or player links ending in #<id> */
+  function trackIdFrom(text) {
+    var m = String(text).match(/(?:track[\/:]|#)([A-Za-z0-9]{22})/);
+    return m ? m[1] : null;
+  }
+
+  /* ---------- Spotify embed (one track only, so nothing plays after it) ---------- */
+  window.onSpotifyIframeApiReady = function (IFrameAPI) {
+    IFrameAPI.createController($('embed'), { width: '100%', height: 152, uri: pendingUri || 'spotify:track:3N0euXIVCohWBV5zjCN8R8' }, function (c) {
+      controller = c;
+      $('player').hidden = !pendingUri;
+      c.addListener('ready', function () { if (pendingUri) { try { c.play(); } catch (e) {} } });
+      c.addListener('playback_update', function (e) {
+        var d = e.data || {};
+        if (!d.isPaused && d.position > 0) { started = true; $('ended').hidden = true; }
+        if (started && d.isPaused && d.duration > 0 && (d.position === 0 || d.position >= d.duration - 1500)) {
+          started = false;
+          $('ended').hidden = false;
+          setStatus('');
+        }
+      });
+    });
+  };
+  var api = document.createElement('script');
+  api.src = 'https://open.spotify.com/embed/iframe-api/v1';
+  api.async = true;
+  document.body.appendChild(api);
+
+  function playTrack(id) {
+    var uri = 'spotify:track:' + id;
+    pendingUri = uri; started = false;
+    $('ended').hidden = true;
+    $('player').hidden = false;
+    setStatus('Loaded. If it doesn’t start on its own, tap play.');
+    if (controller) {
+      controller.loadUri(uri);
+      setTimeout(function () { try { controller.play(); } catch (e) {} }, 600);
+    }
+  }
+
+  /* ---------- Camera + QR scanning ---------- */
+  function stopCamera() {
+    scanning = false;
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    $('camera').hidden = true; $('cancel').hidden = true; $('scan').hidden = false;
+  }
+
+  function onCode(text) {
+    var id = trackIdFrom(text);
+    if (!id) { setStatus('That QR code isn’t a song card. Try another.', true); return false; }
+    stopCamera();
+    if (controller) { try { controller.pause(); } catch (e) {} }
+    playTrack(id);
+    return true;
+  }
+
+  function tick() {
+    if (!scanning) return;
+    if (video.readyState >= 2) {
+      if (detector) {
+        detector.detect(video).then(function (codes) {
+          if (codes.length && onCode(codes[0].rawValue)) return;
+          requestAnimationFrame(tick);
+        }).catch(function () { requestAnimationFrame(tick); });
+        return;
+      }
+      var w = video.videoWidth, h = video.videoHeight, scale = Math.min(1, 720 / Math.max(w, h));
+      canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var code = window.jsQR && jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      if (code && onCode(code.data)) return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('This browser can’t use the camera. Try Chrome or Safari.', true); return;
+    }
+    if (controller) { try { controller.pause(); } catch (e) {} }
+    $('ended').hidden = true;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (s) {
+      stream = s; video.srcObject = s;
+      return video.play();
+    }).then(function () {
+      $('camera').hidden = false; $('cancel').hidden = false; $('scan').hidden = true;
+      setStatus('Point the camera at the QR code on a song card.');
+      if (!detector && 'BarcodeDetector' in window) {
+        try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; }
+      }
+      scanning = true; tick();
+    }).catch(function () {
+      setStatus('Camera permission is needed to scan cards. Allow it in your browser settings and try again.', true);
+    });
+  }
+
+  $('scan').addEventListener('click', startCamera);
+  $('cancel').addEventListener('click', function () { stopCamera(); setStatus(''); });
+
+  /* Opening the app from a link like …/#<trackId> plays that song directly */
+  var fromLink = trackIdFrom(location.hash);
+  if (fromLink) { playTrack(fromLink); } else { $('player').hidden = true; }
+
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
+})();
+</script>
+</body>
+</html>
