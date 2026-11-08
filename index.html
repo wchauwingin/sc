@@ -29,115 +29,242 @@
   main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
   header { display: flex; align-items: center; gap: 10px; }
   header i { width: 5px; height: 22px; border-radius: 3px; background: var(--accent); }
-  h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: -.01em; }
-  .scan-btn {
+  h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: -.01em; flex: 1; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--muted); cursor: pointer; text-decoration: underline; padding: 4px; }
+  .primary {
     font: inherit; font-size: 17px; font-weight: 700; border: 0; border-radius: 14px; cursor: pointer;
     background: var(--accent); color: var(--on-accent); padding: 18px; width: 100%;
     display: flex; align-items: center; justify-content: center; gap: 10px;
   }
-  .scan-btn svg { width: 22px; height: 22px; }
+  .primary svg { width: 22px; height: 22px; }
+  .primary:disabled { opacity: .5; }
   .ghost { font: inherit; font-size: 15px; border: 1px solid var(--line); background: transparent; color: var(--ink);
     border-radius: 12px; padding: 12px; width: 100%; cursor: pointer; }
+  .panel { background: var(--surface); border-radius: 14px; padding: 16px; font-size: 14px; line-height: 1.6; }
+  .panel ol { margin: 6px 0 12px; padding-left: 20px; }
+  .panel code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2px 5px; border-radius: 5px; }
+  .panel input { font: inherit; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); margin: 6px 0 10px; }
   .camera { position: relative; border-radius: 16px; overflow: hidden; background: #000; aspect-ratio: 3 / 4; }
   .camera video { width: 100%; height: 100%; object-fit: cover; display: block; }
   .camera .frame { position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.9); border-radius: 18px;
     box-shadow: 0 0 0 999px rgba(0,0,0,.35); }
   .status { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0; min-height: 1.6em; }
   .status.err { color: var(--danger); }
-  .player iframe { width: 100%; border: 0; border-radius: 12px; display: block; }
-  .ended { background: var(--surface); border-radius: 14px; padding: 14px 16px; font-size: 15px; line-height: 1.5; }
-  .ended strong { display: block; }
+  .now { display: flex; gap: 14px; align-items: center; background: var(--surface); border-radius: 14px; padding: 12px; }
+  .now img { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; background: var(--line); flex: none; }
+  .now .meta { min-width: 0; flex: 1; }
+  .now .label { font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .now .title { font-size: 17px; font-weight: 800; line-height: 1.3; }
+  .now .artist { font-size: 14px; color: var(--muted); }
+  .now button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 999px; width: 44px; height: 44px; cursor: pointer; flex: none; font-size: 16px; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <header><i></i><h1>Song Cards</h1></header>
+  <header><i></i><h1>Song Cards</h1><button class="link" id="settings" type="button" hidden>Settings</button></header>
 
-  <button class="scan-btn" id="scan" type="button">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/></svg>
-    <span id="scan-label">Scan a card</span>
-  </button>
+  <!-- One-time setup: Spotify developer app Client ID -->
+  <section class="panel" id="setup" hidden>
+    <h2>One-time setup</h2>
+    Song Cards plays each card’s song in your Spotify app. To allow that, create a free Spotify developer app:
+    <ol>
+      <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and log in.</li>
+      <li>Create an app. Use any name, tick <b>Web API</b>, and set the Redirect URI to:<br><code id="redirect-uri"></code></li>
+      <li>Copy the app’s <b>Client ID</b> and paste it below.</li>
+    </ol>
+    <label for="client-id">Client ID</label>
+    <input id="client-id" autocomplete="off" spellcheck="false" placeholder="32-character Client ID">
+    <button class="primary" id="save-id" type="button">Save and connect Spotify</button>
+  </section>
 
-  <div class="camera" id="camera" hidden>
-    <video id="video" playsinline muted></video>
-    <div class="frame"></div>
-  </div>
-  <button class="ghost" id="cancel" type="button" hidden>Cancel</button>
+  <section class="panel" id="connect" hidden>
+    <h2>Connect Spotify</h2>
+    Log in once so Song Cards can start songs in your Spotify app. A Premium account (or trial) is needed for playback control.
+    <p style="margin:12px 0 0"><button class="primary" id="login" type="button">Connect Spotify</button></p>
+  </section>
 
-  <p class="status" id="status" role="status">Point the camera at the QR code on a song card.</p>
+  <section id="player-ui" hidden>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <button class="primary" id="scan" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/></svg>
+        <span>Scan a card</span>
+      </button>
+      <div class="camera" id="camera" hidden><video id="video" playsinline muted></video><div class="frame"></div></div>
+      <button class="ghost" id="cancel" type="button" hidden>Cancel</button>
+      <div class="now" id="now" hidden>
+        <img id="now-art" alt="">
+        <div class="meta"><div class="label" id="now-label">Now playing</div><div class="title" id="now-title"></div><div class="artist" id="now-artist"></div></div>
+        <button id="toggle" type="button" aria-label="Pause">❚❚</button>
+      </div>
+      <button class="ghost" id="open-spotify" type="button" hidden>Open the Spotify app</button>
+    </div>
+  </section>
 
-  <div class="ended" id="ended" hidden><strong>Song finished.</strong>Scan your next card to keep listening.</div>
-  <div class="player" id="player"><div id="embed"></div></div>
+  <p class="status" id="status" role="status"></p>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var video = $('video'), statusEl = $('status');
-  var stream = null, scanning = false, detector = null, canvas = document.createElement('canvas');
-  var ctx = canvas.getContext('2d', { willReadFrequently: true });
-  var controller = null, pendingUri = null, started = false;
+  var REDIRECT = location.origin + location.pathname;
+  var SCOPES = 'user-modify-playback-state user-read-playback-state';
+  var K = { id: 'sc-client-id', tok: 'sc-token', ver: 'sc-verifier', last: 'sc-last-track' };
+  var store = {
+    get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+    del: function (k) { try { localStorage.removeItem(k); } catch (e) {} }
+  };
 
-  function setStatus(text, isErr) { statusEl.textContent = text; statusEl.className = 'status' + (isErr ? ' err' : ''); }
-
-  /* Accepts Spotify track links, spotify:track: URIs, or player links ending in #<id> */
+  function setStatus(text, isErr) { $('status').textContent = text || ''; $('status').className = 'status' + (isErr ? ' err' : ''); }
+  function show(view) {
+    ['setup', 'connect', 'player-ui'].forEach(function (v) { $(v).hidden = v !== view; });
+    $('settings').hidden = view === 'setup';
+  }
   function trackIdFrom(text) {
     var m = String(text).match(/(?:track[\/:]|#)([A-Za-z0-9]{22})/);
     return m ? m[1] : null;
   }
 
-  /* ---------- Spotify embed (one track only, so nothing plays after it) ---------- */
-  window.onSpotifyIframeApiReady = function (IFrameAPI) {
-    IFrameAPI.createController($('embed'), { width: '100%', height: 152, uri: pendingUri || 'spotify:track:3N0euXIVCohWBV5zjCN8R8' }, function (c) {
-      controller = c;
-      $('player').hidden = !pendingUri;
-      c.addListener('ready', function () { if (pendingUri) { try { c.play(); } catch (e) {} } });
-      c.addListener('playback_update', function (e) {
-        var d = e.data || {};
-        if (!d.isPaused && d.position > 0) { started = true; $('ended').hidden = true; }
-        if (started && d.isPaused && d.duration > 0 && (d.position === 0 || d.position >= d.duration - 1500)) {
-          started = false;
-          $('ended').hidden = false;
-          setStatus('');
-        }
+  /* ---------- Spotify login (Authorization Code with PKCE; no secret needed) ---------- */
+  function b64url(buf) {
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function randomString(n) {
+    var a = new Uint8Array(n); crypto.getRandomValues(a);
+    return Array.prototype.map.call(a, function (x) { return 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[x % 62]; }).join('');
+  }
+  function login() {
+    var verifier = randomString(64);
+    store.set(K.ver, verifier);
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (hash) {
+      var q = new URLSearchParams({
+        response_type: 'code', client_id: store.get(K.id), scope: SCOPES,
+        code_challenge_method: 'S256', code_challenge: b64url(hash), redirect_uri: REDIRECT
+      });
+      location.href = 'https://accounts.spotify.com/authorize?' + q.toString();
+    });
+  }
+  function tokenRequest(params) {
+    return fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params)
+    }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw j; return j; }); }).then(function (j) {
+      var old = JSON.parse(store.get(K.tok) || '{}');
+      var t = { access: j.access_token, refresh: j.refresh_token || old.refresh, expires: Date.now() + (j.expires_in - 60) * 1000 };
+      store.set(K.tok, JSON.stringify(t));
+      return t;
+    });
+  }
+  function getToken() {
+    var t = JSON.parse(store.get(K.tok) || 'null');
+    if (!t) return Promise.reject('no-token');
+    if (Date.now() < t.expires) return Promise.resolve(t.access);
+    return tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refresh, client_id: store.get(K.id) }).then(function (n) { return n.access; });
+  }
+  function api(method, path, body) {
+    return getToken().then(function (access) {
+      return fetch('https://api.spotify.com/v1' + path, {
+        method: method,
+        headers: Object.assign({ Authorization: 'Bearer ' + access }, body ? { 'Content-Type': 'application/json' } : {}),
+        body: body ? JSON.stringify(body) : undefined
       });
     });
-  };
-  var api = document.createElement('script');
-  api.src = 'https://open.spotify.com/embed/iframe-api/v1';
-  api.async = true;
-  document.body.appendChild(api);
-
-  function playTrack(id) {
-    var uri = 'spotify:track:' + id;
-    pendingUri = uri; started = false;
-    $('ended').hidden = true;
-    $('player').hidden = false;
-    setStatus('Loaded. If it doesn’t start on its own, tap play.');
-    if (controller) {
-      controller.loadUri(uri);
-      setTimeout(function () { try { controller.play(); } catch (e) {} }, 600);
-    }
   }
 
+  /* ---------- Playback ---------- */
+  var current = null, poll = null, playing = false, startedAt = 0;
+
+  function playOn(deviceId, id) {
+    return api('PUT', '/me/player/play' + (deviceId ? '?device_id=' + deviceId : ''), { uris: ['spotify:track:' + id] });
+  }
+  function play(id) {
+    current = id; store.set(K.last, id);
+    setStatus('Starting playback…');
+    $('open-spotify').hidden = true;
+    playOn(null, id).then(function (r) {
+      if (r.status !== 404) return r;
+      // No active device: pick this phone (or any available device) and try again
+      return api('GET', '/me/player/devices').then(function (d) { return d.json(); }).then(function (j) {
+        var devs = (j.devices || []);
+        var dev = devs.filter(function (x) { return x.type === 'Smartphone'; })[0] || devs[0];
+        if (!dev) return { status: 'no-device' };
+        return playOn(dev.id, id);
+      });
+    }).then(function (r) {
+      if (r.status === 'no-device') {
+        setStatus('Open the Spotify app on this phone once, then scan the card again.', true);
+        $('open-spotify').hidden = false; return;
+      }
+      if (r.status === 403) { setStatus('Spotify only allows this with a Premium account (a trial counts).', true); return; }
+      if (r.status === 401) { show('connect'); setStatus('Please connect Spotify again.', true); return; }
+      if (!r.ok && r.status !== 204 && r.status !== 202) { setStatus('Spotify couldn’t start this song (error ' + r.status + ').', true); return; }
+      api('PUT', '/me/player/repeat?state=off'); api('PUT', '/me/player/shuffle?state=false');
+      playing = true; startedAt = Date.now();
+      setStatus('');
+      showTrack(id);
+      startPolling();
+    }).catch(function (e) {
+      if (e === 'no-token') { show('connect'); return; }
+      setStatus('Couldn’t reach Spotify. Check your connection and try again.', true);
+    });
+  }
+  function showTrack(id) {
+    api('GET', '/tracks/' + id).then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
+      $('now').hidden = false; $('now-label').textContent = 'Now playing'; $('toggle').hidden = false;
+      $('toggle').textContent = '❚❚'; $('toggle').setAttribute('aria-label', 'Pause');
+      $('now-title').textContent = t ? t.name : 'Song from your card';
+      $('now-artist').textContent = t ? t.artists.map(function (a) { return a.name; }).join(', ') : '';
+      var img = t && t.album && t.album.images && t.album.images[0];
+      if (img) { $('now-art').src = img.url; $('now-art').hidden = false; } else { $('now-art').hidden = true; }
+    });
+  }
+  function finished(msg) {
+    playing = false; stopPolling();
+    $('now-label').textContent = 'Finished'; $('toggle').hidden = true;
+    setStatus(msg || 'Song finished. Scan your next card to keep listening.');
+  }
+  function startPolling() {
+    stopPolling();
+    poll = setInterval(function () {
+      api('GET', '/me/player').then(function (r) { return r.status === 200 ? r.json() : null; }).then(function (p) {
+        if (Date.now() - startedAt < 4000) return;
+        if (!p || !p.item) { finished(); return; }
+        if (p.item.id !== current) {
+          finished('Song finished, and Spotify moved on to another song. Turn off Autoplay in the Spotify app’s settings to stop after each card.');
+          return;
+        }
+        var nearEnd = p.progress_ms >= p.item.duration_ms - 2500 || p.progress_ms === 0;
+        if (!p.is_playing && nearEnd) finished();
+        $('toggle').textContent = p.is_playing ? '❚❚' : '▶';
+        $('toggle').setAttribute('aria-label', p.is_playing ? 'Pause' : 'Play');
+      }).catch(function () {});
+    }, 4000);
+  }
+  function stopPolling() { if (poll) { clearInterval(poll); poll = null; } }
+
+  $('toggle').addEventListener('click', function () {
+    var pausing = $('toggle').textContent === '❚❚';
+    api('PUT', pausing ? '/me/player/pause' : '/me/player/play').then(function () {
+      $('toggle').textContent = pausing ? '▶' : '❚❚';
+    });
+  });
+  $('open-spotify').addEventListener('click', function () { location.href = 'spotify:'; });
+
   /* ---------- Camera + QR scanning ---------- */
+  var video = $('video'), stream = null, scanning = false, detector = null;
+  var canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
   function stopCamera() {
     scanning = false;
     if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
     $('camera').hidden = true; $('cancel').hidden = true; $('scan').hidden = false;
   }
-
   function onCode(text) {
     var id = trackIdFrom(text);
     if (!id) { setStatus('That QR code isn’t a song card. Try another.', true); return false; }
-    stopCamera();
-    if (controller) { try { controller.pause(); } catch (e) {} }
-    playTrack(id);
-    return true;
+    stopCamera(); play(id); return true;
   }
-
   function tick() {
     if (!scanning) return;
     if (video.readyState >= 2) {
@@ -148,8 +275,8 @@
         }).catch(function () { requestAnimationFrame(tick); });
         return;
       }
-      var w = video.videoWidth, h = video.videoHeight, scale = Math.min(1, 720 / Math.max(w, h));
-      canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+      var w = video.videoWidth, h = video.videoHeight, sc = Math.min(1, 720 / Math.max(w, h));
+      canvas.width = Math.round(w * sc); canvas.height = Math.round(h * sc);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       var code = window.jsQR && jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
@@ -157,34 +284,48 @@
     }
     requestAnimationFrame(tick);
   }
-
   function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setStatus('This browser can’t use the camera. Try Chrome or Safari.', true); return;
-    }
-    if (controller) { try { controller.pause(); } catch (e) {} }
-    $('ended').hidden = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('This browser can’t use the camera.', true); return; }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (s) {
-      stream = s; video.srcObject = s;
-      return video.play();
+      stream = s; video.srcObject = s; return video.play();
     }).then(function () {
       $('camera').hidden = false; $('cancel').hidden = false; $('scan').hidden = true;
       setStatus('Point the camera at the QR code on a song card.');
-      if (!detector && 'BarcodeDetector' in window) {
-        try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; }
-      }
+      if (!detector && 'BarcodeDetector' in window) { try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
       scanning = true; tick();
-    }).catch(function () {
-      setStatus('Camera permission is needed to scan cards. Allow it in your browser settings and try again.', true);
-    });
+    }).catch(function () { setStatus('Camera permission is needed to scan cards. Allow it in your browser settings and try again.', true); });
   }
-
   $('scan').addEventListener('click', startCamera);
   $('cancel').addEventListener('click', function () { stopCamera(); setStatus(''); });
 
-  /* Opening the app from a link like …/#<trackId> plays that song directly */
-  var fromLink = trackIdFrom(location.hash);
-  if (fromLink) { playTrack(fromLink); } else { $('player').hidden = true; }
+  /* ---------- Setup and startup ---------- */
+  $('redirect-uri').textContent = REDIRECT;
+  $('save-id').addEventListener('click', function () {
+    var v = $('client-id').value.trim();
+    if (!/^[0-9a-f]{32}$/i.test(v)) { setStatus('That doesn’t look like a Client ID (32 letters and numbers).', true); return; }
+    store.set(K.id, v); login();
+  });
+  $('login').addEventListener('click', login);
+  $('settings').addEventListener('click', function () {
+    stopCamera(); stopPolling(); store.del(K.tok);
+    $('client-id').value = store.get(K.id) || '';
+    show('setup'); setStatus('Paste a Client ID to reconnect, or keep the current one and press the button.');
+  });
+
+  var params = new URLSearchParams(location.search);
+  if (!store.get(K.id)) { show('setup'); }
+  else if (params.get('code')) {
+    tokenRequest({ grant_type: 'authorization_code', code: params.get('code'), redirect_uri: REDIRECT, client_id: store.get(K.id), code_verifier: store.get(K.ver) })
+      .then(function () { history.replaceState(null, '', REDIRECT); show('player-ui'); setStatus('Connected. Scan a card to play it.'); })
+      .catch(function () { history.replaceState(null, '', REDIRECT); show('connect'); setStatus('Spotify login didn’t complete. Check the Redirect URI matches exactly, then try again.', true); });
+  } else if (params.get('error')) {
+    history.replaceState(null, '', REDIRECT); show('connect'); setStatus('Spotify login was cancelled.', true);
+  } else if (!store.get(K.tok)) { show('connect'); }
+  else {
+    show('player-ui');
+    var fromLink = trackIdFrom(location.hash);
+    if (fromLink) play(fromLink); else setStatus('Scan a card to play it.');
+  }
 
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
 })();
