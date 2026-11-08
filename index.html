@@ -98,6 +98,7 @@
         <div class="meta"><div class="label" id="now-label">Now playing</div><div class="title" id="now-title"></div><div class="artist" id="now-artist"></div></div>
         <button id="toggle" type="button" aria-label="Pause">❚❚</button>
       </div>
+      <button class="primary" id="retry" type="button" hidden>Try again</button>
       <button class="ghost" id="open-spotify" type="button" hidden>Open the Spotify app</button>
     </div>
   </section>
@@ -174,46 +175,54 @@
   }
 
   /* ---------- Playback ---------- */
-  var current = null, poll = null, playing = false, startedAt = 0;
+  var current = null, poll = null, startedAt = 0, sawPlaying = false, attempts = 0;
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-  function playOn(deviceId, id) {
-    return api('PUT', '/me/player/play' + (deviceId ? '?device_id=' + deviceId : ''), { uris: ['spotify:track:' + id] });
+  /* Prefer the device that's already active, otherwise this phone, otherwise anything available */
+  function pickDevice() {
+    return api('GET', '/me/player/devices').then(function (r) { return r.ok ? r.json() : { devices: [] }; }).then(function (j) {
+      var d = j.devices || [];
+      return d.filter(function (x) { return x.is_active; })[0] || d.filter(function (x) { return x.type === 'Smartphone'; })[0] || d[0] || null;
+    });
+  }
+  function startOn(id) {
+    return pickDevice().then(function (dev) {
+      if (!dev) return { status: 'no-device' };
+      // Wake the device by transferring playback to it first, then start the single song (no album context)
+      var pre = dev.is_active ? Promise.resolve() : api('PUT', '/me/player', { device_ids: [dev.id], play: false }).then(function () { return wait(900); });
+      return pre.then(function () { return api('PUT', '/me/player/play?device_id=' + dev.id, { uris: ['spotify:track:' + id] }); });
+    });
   }
   function play(id) {
     current = id; store.set(K.last, id);
+    sawPlaying = false; attempts = 0;
+    $('open-spotify').hidden = true; $('retry').hidden = true;
     setStatus('Starting playback…');
-    $('open-spotify').hidden = true;
-    playOn(null, id).then(function (r) {
-      if (r.status !== 404) return r;
-      // No active device: pick this phone (or any available device) and try again
-      return api('GET', '/me/player/devices').then(function (d) { return d.json(); }).then(function (j) {
-        var devs = (j.devices || []);
-        var dev = devs.filter(function (x) { return x.type === 'Smartphone'; })[0] || devs[0];
-        if (!dev) return { status: 'no-device' };
-        return playOn(dev.id, id);
-      });
-    }).then(function (r) {
-      if (r.status === 'no-device') {
-        setStatus('Open the Spotify app on this phone once, then scan the card again.', true);
-        $('open-spotify').hidden = false; return;
-      }
-      if (r.status === 403) { setStatus('Spotify only allows this with a Premium account (a trial counts).', true); return; }
-      if (r.status === 401) { show('connect'); setStatus('Please connect Spotify again.', true); return; }
-      if (!r.ok && r.status !== 204 && r.status !== 202) { setStatus('Spotify couldn’t start this song (error ' + r.status + ').', true); return; }
-      api('PUT', '/me/player/repeat?state=off'); api('PUT', '/me/player/shuffle?state=false');
-      playing = true; startedAt = Date.now();
-      setStatus('');
-      showTrack(id);
-      startPolling();
-    }).catch(function (e) {
+    startOn(id).then(handleStart).catch(function (e) {
       if (e === 'no-token') { show('connect'); return; }
       setStatus('Couldn’t reach Spotify. Check your connection and try again.', true);
     });
   }
-  function showTrack(id) {
+  function handleStart(r) {
+    if (r.status === 'no-device') { notStarted('Spotify isn’t open on this phone. Open the Spotify app, then come back and tap Try again.'); return; }
+    if (r.status === 403) { setStatus('Spotify only allows this with a Premium account (a trial counts).', true); return; }
+    if (r.status === 401) { show('connect'); setStatus('Please connect Spotify again.', true); return; }
+    if (!r.ok) { notStarted('Spotify couldn’t start this song (error ' + r.status + '). Open the Spotify app, then tap Try again.'); return; }
+    api('PUT', '/me/player/repeat?state=off'); api('PUT', '/me/player/shuffle?state=false');
+    startedAt = Date.now();
+    setStatus('');
+    showTrack(current, 'Starting…');
+    startPolling();
+  }
+  function notStarted(msg) {
+    stopPolling();
+    $('now-label').textContent = 'Not playing'; $('toggle').hidden = true;
+    setStatus(msg, true);
+    $('open-spotify').hidden = false; $('retry').hidden = false;
+  }
+  function showTrack(id, label) {
+    $('now').hidden = false; $('now-label').textContent = label; $('toggle').hidden = true;
     api('GET', '/tracks/' + id).then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
-      $('now').hidden = false; $('now-label').textContent = 'Now playing'; $('toggle').hidden = false;
-      $('toggle').textContent = '❚❚'; $('toggle').setAttribute('aria-label', 'Pause');
       $('now-title').textContent = t ? t.name : 'Song from your card';
       $('now-artist').textContent = t ? t.artists.map(function (a) { return a.name; }).join(', ') : '';
       var img = t && t.album && t.album.images && t.album.images[0];
@@ -221,7 +230,7 @@
     });
   }
   function finished(msg) {
-    playing = false; stopPolling();
+    stopPolling();
     $('now-label').textContent = 'Finished'; $('toggle').hidden = true;
     setStatus(msg || 'Song finished. Scan your next card to keep listening.');
   }
@@ -229,18 +238,33 @@
     stopPolling();
     poll = setInterval(function () {
       api('GET', '/me/player').then(function (r) { return r.status === 200 ? r.json() : null; }).then(function (p) {
-        if (Date.now() - startedAt < 4000) return;
-        if (!p || !p.item) { finished(); return; }
-        if (p.item.id !== current) {
-          finished('Song finished, and Spotify moved on to another song. Turn off Autoplay in the Spotify app’s settings to stop after each card.');
+        var isOurs = p && p.item && p.item.id === current;
+        if (!sawPlaying) {
+          if (isOurs && p.is_playing) {
+            sawPlaying = true;
+            $('now-label').textContent = 'Now playing'; $('toggle').hidden = false;
+            $('toggle').textContent = '❚❚'; $('toggle').setAttribute('aria-label', 'Pause');
+            return;
+          }
+          if (Date.now() - startedAt > 9000) {
+            if (attempts < 1) {            // one automatic retry, then ask
+              attempts++; startedAt = Date.now();
+              startOn(current).catch(function () {});
+            } else {
+              notStarted('Spotify didn’t start playing. Open the Spotify app so this phone is active, then tap Try again.');
+            }
+          }
           return;
         }
+        if (!p || !p.item) { finished(); return; }
+        if (!isOurs) { finished('Song finished, and Spotify moved on to another song. Turn off Autoplay in the Spotify app’s settings to stop after each card.'); return; }
         var nearEnd = p.progress_ms >= p.item.duration_ms - 2500 || p.progress_ms === 0;
-        if (!p.is_playing && nearEnd) finished();
+        if (!p.is_playing && nearEnd) { finished(); return; }
+        $('now-label').textContent = p.is_playing ? 'Now playing' : 'Paused';
         $('toggle').textContent = p.is_playing ? '❚❚' : '▶';
         $('toggle').setAttribute('aria-label', p.is_playing ? 'Pause' : 'Play');
       }).catch(function () {});
-    }, 4000);
+    }, 2000);
   }
   function stopPolling() { if (poll) { clearInterval(poll); poll = null; } }
 
@@ -251,6 +275,7 @@
     });
   });
   $('open-spotify').addEventListener('click', function () { location.href = 'spotify:'; });
+  $('retry').addEventListener('click', function () { if (current) play(current); });
 
   /* ---------- Camera + QR scanning ---------- */
   var video = $('video'), stream = null, scanning = false, detector = null;
