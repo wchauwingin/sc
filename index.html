@@ -58,6 +58,7 @@
   .now .title { font-size: 17px; font-weight: 800; line-height: 1.3; }
   .now .artist { font-size: 14px; color: var(--muted); }
   .now button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 999px; width: 44px; height: 44px; cursor: pointer; flex: none; font-size: 16px; }
+  .version { color: var(--muted); font-size: 11px; text-align: center; margin: 8px 0 0; opacity: .7; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -104,6 +105,7 @@
   </section>
 
   <p class="status" id="status" role="status"></p>
+  <p class="version">Song Cards version 6</p>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
@@ -176,7 +178,7 @@
 
   /* ---------- Playback ---------- */
   var current = null, poll = null, startedAt = 0, sawPlaying = false, attempts = 0;
-  var expected = { name: null }, sentTo = null, lastSeen = null;
+  var expected = { name: null }, sentTo = null, lastSeen = null, playStatus = null;
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   /* Prefer the device that's already active, otherwise this phone, otherwise anything available */
@@ -188,18 +190,29 @@
         d.filter(function (x) { return x.is_active; })[0] || d[0] || null;
     });
   }
+  /* mode 'single': play just this track. mode 'album': play it inside its album, and Song Cards pauses when it ends */
+  var mode = 'single', stopTimer = null, wakeLock = null;
+  function albumBody(id) {
+    return api('GET', '/tracks/' + id + '?market=from_token').then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
+      if (!t || !t.album) return { uris: ['spotify:track:' + id] };
+      return { context_uri: t.album.uri, offset: { uri: t.uri }, position_ms: 0 };
+    });
+  }
   function startOn(id) {
     return pickDevice().then(function (dev) {
       if (!dev) return { status: 'no-device' };
       sentTo = dev.name + ' (' + dev.type + ')';
       // Wake the device by transferring playback to it first, then start the single song (no album context)
       var pre = dev.is_active ? Promise.resolve() : api('PUT', '/me/player', { device_ids: [dev.id], play: false }).then(function () { return wait(900); });
-      return pre.then(function () { return api('PUT', '/me/player/play?device_id=' + dev.id, { uris: ['spotify:track:' + id] }); });
+      return pre.then(function () { return mode === 'album' ? albumBody(id) : { uris: ['spotify:track:' + id] }; })
+        .then(function (body) { return api('PUT', '/me/player/play?device_id=' + dev.id, body); })
+        .then(function (r) { playStatus = r.status; return r; });
     });
   }
   function play(id) {
     current = id; store.set(K.last, id);
-    sawPlaying = false; attempts = 0; expected = { name: null }; sentTo = null; lastSeen = null;
+    sawPlaying = false; attempts = 0; expected = { name: null }; sentTo = null; lastSeen = null; playStatus = null;
+    mode = 'single'; clearStop();
     $('open-spotify').hidden = true; $('retry').hidden = true;
     setStatus('Starting playback…');
     startOn(id).then(handleStart).catch(function (e) {
@@ -224,6 +237,7 @@
     var p = lastSeen, info = 'Details: sent to ' + (sentTo || 'no device') + '. Spotify reports ';
     info += !p ? 'nothing playing.' : ((p.is_playing ? 'playing ' : 'paused on ') + '“' + (p.item ? p.item.name : 'unknown') + '”' +
       (p.device ? ' on ' + p.device.name + ' (' + p.device.type + ')' : '') + '.');
+    info += ' Mode: ' + mode + '. Play request: ' + playStatus + '. Song playable in your country: ' + (expected.playable === undefined ? 'unknown' : (expected.playable ? 'yes' : 'no')) + '.';
     setStatus(msg + ' ' + info, true);
     $('open-spotify').hidden = false; $('retry').hidden = false;
   }
@@ -231,14 +245,22 @@
     $('now').hidden = false; $('now-label').textContent = label; $('toggle').hidden = true;
     api('GET', '/tracks/' + id + '?market=from_token').then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
       expected.name = t ? t.name : null; expected.relinked = t && t.linked_from ? t.id : null;
+      expected.playable = t ? t.is_playable : undefined;
       $('now-title').textContent = t ? t.name : 'Song from your card';
       $('now-artist').textContent = t ? t.artists.map(function (a) { return a.name; }).join(', ') : '';
       var img = t && t.album && t.album.images && t.album.images[0];
       if (img) { $('now-art').src = img.url; $('now-art').hidden = false; } else { $('now-art').hidden = true; }
     });
   }
+  function clearStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }
+  function holdScreen(on) {
+    try {
+      if (on && !wakeLock && navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { wakeLock = l; }).catch(function () {});
+      if (!on && wakeLock) { wakeLock.release(); wakeLock = null; }
+    } catch (e) {}
+  }
   function finished(msg) {
-    stopPolling();
+    stopPolling(); clearStop(); holdScreen(false);
     $('now-label').textContent = 'Finished'; $('toggle').hidden = true;
     setStatus(msg || 'Song finished. Scan your next card to keep listening.');
   }
@@ -258,8 +280,8 @@
             return;
           }
           if (Date.now() - startedAt > 9000) {
-            if (attempts < 1) {            // one automatic retry, then ask
-              attempts++; startedAt = Date.now();
+            if (attempts < 1) {            // fall back to album mode, then ask
+              attempts++; startedAt = Date.now(); mode = 'album';
               startOn(current).catch(function () {});
             } else {
               notStarted('Spotify didn’t start playing. Open the Spotify app so this phone is active, then tap Try again.');
@@ -268,7 +290,13 @@
           return;
         }
         if (!p || !p.item) { finished(); return; }
+        if (!isOurs && mode === 'album') { api('PUT', '/me/player/pause'); finished(); return; }
         if (!isOurs) { finished('Song finished, and Spotify moved on to another song. Turn off Autoplay in the Spotify app’s settings to stop after each card.'); return; }
+        if (mode === 'album' && p.is_playing) {
+          holdScreen(true);
+          var left = p.item.duration_ms - p.progress_ms;
+          if (left < 9000 && !stopTimer) stopTimer = setTimeout(function () { api('PUT', '/me/player/pause'); }, Math.max(0, left - 700));
+        }
         var nearEnd = p.progress_ms >= p.item.duration_ms - 2500 || p.progress_ms === 0;
         if (!p.is_playing && nearEnd) { finished(); return; }
         $('now-label').textContent = p.is_playing ? 'Now playing' : 'Paused';
