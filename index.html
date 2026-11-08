@@ -176,18 +176,22 @@
 
   /* ---------- Playback ---------- */
   var current = null, poll = null, startedAt = 0, sawPlaying = false, attempts = 0;
+  var expected = { name: null }, sentTo = null, lastSeen = null;
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   /* Prefer the device that's already active, otherwise this phone, otherwise anything available */
   function pickDevice() {
     return api('GET', '/me/player/devices').then(function (r) { return r.ok ? r.json() : { devices: [] }; }).then(function (j) {
       var d = j.devices || [];
-      return d.filter(function (x) { return x.is_active; })[0] || d.filter(function (x) { return x.type === 'Smartphone'; })[0] || d[0] || null;
+      var phone = function (x) { return x.type === 'Smartphone'; };
+      return d.filter(function (x) { return phone(x) && x.is_active; })[0] || d.filter(phone)[0] ||
+        d.filter(function (x) { return x.is_active; })[0] || d[0] || null;
     });
   }
   function startOn(id) {
     return pickDevice().then(function (dev) {
       if (!dev) return { status: 'no-device' };
+      sentTo = dev.name + ' (' + dev.type + ')';
       // Wake the device by transferring playback to it first, then start the single song (no album context)
       var pre = dev.is_active ? Promise.resolve() : api('PUT', '/me/player', { device_ids: [dev.id], play: false }).then(function () { return wait(900); });
       return pre.then(function () { return api('PUT', '/me/player/play?device_id=' + dev.id, { uris: ['spotify:track:' + id] }); });
@@ -195,7 +199,7 @@
   }
   function play(id) {
     current = id; store.set(K.last, id);
-    sawPlaying = false; attempts = 0;
+    sawPlaying = false; attempts = 0; expected = { name: null }; sentTo = null; lastSeen = null;
     $('open-spotify').hidden = true; $('retry').hidden = true;
     setStatus('Starting playback…');
     startOn(id).then(handleStart).catch(function (e) {
@@ -217,12 +221,16 @@
   function notStarted(msg) {
     stopPolling();
     $('now-label').textContent = 'Not playing'; $('toggle').hidden = true;
-    setStatus(msg, true);
+    var p = lastSeen, info = 'Details: sent to ' + (sentTo || 'no device') + '. Spotify reports ';
+    info += !p ? 'nothing playing.' : ((p.is_playing ? 'playing ' : 'paused on ') + '“' + (p.item ? p.item.name : 'unknown') + '”' +
+      (p.device ? ' on ' + p.device.name + ' (' + p.device.type + ')' : '') + '.');
+    setStatus(msg + ' ' + info, true);
     $('open-spotify').hidden = false; $('retry').hidden = false;
   }
   function showTrack(id, label) {
     $('now').hidden = false; $('now-label').textContent = label; $('toggle').hidden = true;
-    api('GET', '/tracks/' + id).then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
+    api('GET', '/tracks/' + id + '?market=from_token').then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
+      expected.name = t ? t.name : null; expected.relinked = t && t.linked_from ? t.id : null;
       $('now-title').textContent = t ? t.name : 'Song from your card';
       $('now-artist').textContent = t ? t.artists.map(function (a) { return a.name; }).join(', ') : '';
       var img = t && t.album && t.album.images && t.album.images[0];
@@ -237,8 +245,11 @@
   function startPolling() {
     stopPolling();
     poll = setInterval(function () {
-      api('GET', '/me/player').then(function (r) { return r.status === 200 ? r.json() : null; }).then(function (p) {
-        var isOurs = p && p.item && p.item.id === current;
+      api('GET', '/me/player?market=from_token').then(function (r) { return r.status === 200 ? r.json() : null; }).then(function (p) {
+        lastSeen = p;
+        var it = p && p.item;
+        var isOurs = !!it && (it.id === current || (it.linked_from && it.linked_from.id === current) ||
+          (expected.relinked && it.id === expected.relinked) || (expected.name && it.name === expected.name));
         if (!sawPlaying) {
           if (isOurs && p.is_playing) {
             sawPlaying = true;
